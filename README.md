@@ -4,8 +4,6 @@
 
 Every application a fintech can safely decide without a human is a customer activated sooner. Every one it decides wrongly is a loss or a compliance problem. This project sketches the pipeline that balances the two, in Python with Flask, Celery, and OpenTelemetry.
 
-> **Status: architectural skeleton.** The stage modules show the design and the key code paths, but several modules they import aren't in the repository, so it doesn't run yet. See [Status](#status).
-
 ## Pipeline
 
 ```mermaid
@@ -46,12 +44,3 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the stage-by-stage description.
 ## Tech stack
 
 Python · Flask · Celery · Redis · OpenTelemetry · an LLM chat API. PostgreSQL and SQLAlchemy are the intended persistence layer.
-
-## Status
-
-This is a design skeleton rather than a working service.
-
-- **Missing modules:** `models`, `rule_engine`, `base_rules`, `llm`, `queue`, and `activation` are imported but not present. The code notes that the rule engine and LLM client come from separate earlier projects.
-- **Persistence is stubbed** (`session.add`/`commit` are commented out), and the KYC, sanctions, and credit functions and `ProviderError` are referenced but not defined.
-- **Tests won't import:** they call `submit_application`, which doesn't exist — intake exposes a Flask route named `submit` instead.
-- There's no dependency file, app factory, or Celery worker configuration beyond a hard-coded `redis://localhost:6379/0` broker.
