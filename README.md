@@ -1,13 +1,57 @@
-# AI-Assisted Fintech Onboarding & Risk Decisioning Platform
+# Fintech Onboarding & Risk Decisioning
 
-An advanced backend capstone in Python/Flask that builds the complete onboarding-and-risk-decisioning platform a fintech runs to activate customers safely. Businesses apply; you collect company, identity, and financial data into Postgres; a rule engine plus an LLM-assisted reviewer turn the application's risk signals into approve / reject / escalate. Low-risk applications auto-approve and activate; risky ones land in an ops review queue with an AI-generated summary that tells the reviewer what to look at. You move the slow work (KYC checks, the LLM call) off the request path with Celery and Redis so intake stays fast, instrument the whole pipeline with OpenTelemetry and surface the metrics that actually matter — approval rate, manual-review time, fraud flags, onboarding conversion — on a dashboard. You reason about the activation funnel as a product surface: every point you can safely auto-decide is a customer activated faster. This is product engineering, fintech decisioning, AI-assisted ops, async work, and observability in one system — the shape of real onboarding infrastructure.
+**A reference design for business onboarding at a fintech: fast intake, asynchronous KYC/credit/fraud enrichment, a rules-plus-LLM decision step, and an ops review queue with AI-written summaries — instrumented around the activation funnel.**
 
-## Stack
-- Python
-- Flask
-- SQLAlchemy
-- PostgreSQL
-- Redis
-- Celery
-- LLM API
-- OpenTelemetry
+Every application a fintech can safely decide without a human is a customer activated sooner. Every one it decides wrongly is a loss or a compliance problem. This project sketches the pipeline that balances the two, in Python with Flask, Celery, and OpenTelemetry.
+
+> **Status: architectural skeleton.** The stage modules show the design and the key code paths, but several modules they import aren't in the repository, so it doesn't run yet. See [Status](#status).
+
+## Pipeline
+
+```mermaid
+flowchart LR
+    A[POST /applications] -->|persist, 202| I[Intake<br/>Flask]
+    I -->|.delay| E[Enrich<br/>Celery + Redis<br/>KYC · sanctions · credit]
+    E -->|.delay| D[Decide<br/>rule engine + LLM rule]
+    D -->|.delay| R{Resolve}
+    R -->|approve| ACT[Activate account]
+    R -->|reject| REJ[Close with reasons]
+    R -->|escalate| Q[Ops review queue<br/>+ AI summary]
+```
+
+## Design decisions
+
+- **The applicant never waits on a provider.** Intake validates the minimum (`legal_name`, `ein`), persists the application, queues enrichment, and returns `202`. Persist-then-process means a crash mid-enrichment is retryable.
+- **Flaky providers retry, they don't fail applications.** Enrichment is a Celery task with `max_retries=3` and a 10-second delay on provider errors.
+- **The LLM is one voice, not the decider.** `review_ai.llm_review` forces strict JSON (`risk`, `rationale`, `flags`), validates it, and defaults to `medium` on anything unexpected. `decision.py` adds it to the rule engine as a weighted rule — 0 / 20 / 40 points for low / medium / high — so the final call stays with the rules and every reason is recorded.
+- **Escalations arrive with context.** Escalated applications are queued for ops along with an AI summary of the concern, so reviewers start from "here's what's wrong" rather than raw data.
+- **Measure the funnel, not vanity counts.** OpenTelemetry spans wrap each stage; metrics track decisions by outcome, time in the review queue, and fraud flags. `funnel.py` reports the auto-decision rate, escalation rate, median review time, and conversion — the levers for widening or tightening auto-approval.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the stage-by-stage description.
+
+## Layout
+
+| File | Stage |
+|---|---|
+| `src/intake.py` | Flask blueprint: `POST /applications` |
+| `src/enrich.py` | Celery app and enrichment task |
+| `src/decision.py` | Rule engine wiring plus the LLM rule |
+| `src/review_ai.py` | Structured LLM review prompt and validation |
+| `src/resolve.py` | Activate, reject, or enqueue for review |
+| `src/metrics.py` | OpenTelemetry tracer, meter, and stage decorator |
+| `src/funnel.py` | Activation-funnel report |
+| `src/pipeline.py` | Named stage list |
+| `tests/test_pipeline.py` | Intended end-to-end tests: clean business auto-activates; risky one is escalated with a summary |
+
+## Tech stack
+
+Python · Flask · Celery · Redis · OpenTelemetry · an LLM chat API. PostgreSQL and SQLAlchemy are the intended persistence layer.
+
+## Status
+
+This is a design skeleton rather than a working service.
+
+- **Missing modules:** `models`, `rule_engine`, `base_rules`, `llm`, `queue`, and `activation` are imported but not present. The code notes that the rule engine and LLM client come from separate earlier projects.
+- **Persistence is stubbed** (`session.add`/`commit` are commented out), and the KYC, sanctions, and credit functions and `ProviderError` are referenced but not defined.
+- **Tests won't import:** they call `submit_application`, which doesn't exist — intake exposes a Flask route named `submit` instead.
+- There's no dependency file, app factory, or Celery worker configuration beyond a hard-coded `redis://localhost:6379/0` broker.
